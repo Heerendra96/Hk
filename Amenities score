@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Amenities Scored for Your Region Based on Walkability</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <style>
+        body {
+            font-family: 'Roboto', sans-serif;
+        }
+        #map {
+            height: 600px;
+            width: 100%;
+        }
+        #locationList {
+            margin-top: 20px;
+        }
+        #legend {
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.2);
+            font-size: 14px;
+            line-height: 18px;
+            color: #555;
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1000;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+        .legend-item img {
+            width: 32px;
+            height: 32px;
+            margin-right: 8px;
+        }
+        #locationDetails {
+            margin-top: 20px;
+            background: #f8f8f8;
+            padding: 15px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            font-size: 16px;
+        }
+        .category {
+            margin-top: 20px;
+        }
+        .category h4 {
+            margin-bottom: 10px;
+        }
+        .category ul {
+            padding-left: 20px;
+            list-style-type: disc;
+        }
+    </style>
+</head>
+<body>
+    <h2>Amenities Scored for Your Region Based on Walkability</h2>
+    <div id="map"></div>
+    <div id="locationDetails"></div>
+    <div id="legend">
+        <div class="legend-item">
+            <img src="https://i.imgur.com/6fVdfvc.png" alt="Restaurant Icon">
+            <label for="toggleRestaurants">Restaurants</label>
+        </div>
+        <div class="legend-item">
+            <img src="https://i.imgur.com/2PN8MFI.png" alt="School Icon">
+            <label for="toggleSchools">Schools</label>
+        </div>
+        <div class="legend-item">
+            <img src="https://i.imgur.com/QQGlLE0.png" alt="Hospital Icon">
+            <label for="toggleHospitals">Hospitals</label>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+    <script>
+        let map;
+        let isochroneLayer;
+        let restaurantMarkers = [];
+        let schoolMarkers = [];
+        let hospitalMarkers = [];
+
+        function initializeMap() {
+            map = L.map('map').setView([13.073537218008402, 80.26095142142864], 15); // Default location
+            
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>'
+            }).addTo(map);
+
+            map.on('click', onMapClick);
+        }
+
+        function onMapClick(e) {
+            const lat = e.latlng.lat;
+            const lon = e.latlng.lng;
+
+            if (isochroneLayer) {
+                map.removeLayer(isochroneLayer);
+            }
+
+            fetchIsochrone(lat, lon);
+            fetchAmenities(lat, lon);
+        }
+
+        function fetchIsochrone(lat, lon) {
+            fetch('https://api.openrouteservice.org/v2/isochrones/foot-walking', {
+                method: 'POST',
+                headers: {
+                    'Authorization': '5b3ce3597851110001cf624851c9b3750ebe4269b7de0cc858e1ee9f',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    locations: [[lon, lat]],
+                    range: [900] // 15 minutes (900 seconds)
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                isochroneLayer = L.geoJSON(data, {
+                    style: function() {
+                        return { color: '#ff7800', weight: 2 };
+                    }
+                }).addTo(map);
+            })
+            .catch(error => console.error('Error fetching isochrone data:', error));
+        }
+
+        function fetchAmenities(lat, lon) {
+            const radius = 1200; // Radius in meters (15 minutes walking distance)
+
+            const queries = [
+                `[out:json];node(around:${radius}, ${lat}, ${lon})["amenity"="restaurant"];out body;`,
+                `[out:json];node(around:${radius}, ${lat}, ${lon})["amenity"="school"];out body;`,
+                `[out:json];node(around:${radius}, ${lat}, ${lon})["amenity"="hospital"];out body;`
+            ];
+
+            restaurantMarkers.forEach(marker => map.removeLayer(marker));
+            schoolMarkers.forEach(marker => map.removeLayer(marker));
+            hospitalMarkers.forEach(marker => map.removeLayer(marker));
+
+            restaurantMarkers = [];
+            schoolMarkers = [];
+            hospitalMarkers = [];
+
+            const locationDetails = document.getElementById('locationDetails');
+            locationDetails.innerHTML = `
+                <div class="category">
+                    <h4>Restaurants:</h4>
+                    <ul id="restaurantList"></ul>
+                </div>
+                <div class="category">
+                    <h4>Schools:</h4>
+                    <ul id="schoolList"></ul>
+                </div>
+                <div class="category">
+                    <h4>Hospitals:</h4>
+                    <ul id="hospitalList"></ul>
+                </div>
+            `;
+
+            queries.forEach((query, index) => {
+                fetch('https://overpass-api.de/api/interpreter', {
+                    method: 'POST',
+                    body: query
+                })
+                .then(response => response.json())
+                .then(data => {
+                    data.elements.forEach(element => {
+                        const locationLat = element.lat;
+                        const locationLon = element.lon;
+                        const locationName = element.tags.name || "Unknown Location";
+                        const distance = (L.latLng(lat, lon).distanceTo(L.latLng(locationLat, locationLon)) / 1000).toFixed(2);
+
+                        let ul;
+                        let iconUrl;
+                        let markerArray;
+                        if (index === 0) {
+                            ul = document.getElementById('restaurantList');
+                            iconUrl = 'https://i.imgur.com/6fVdfvc.png'; // Restaurant icon
+                            markerArray = restaurantMarkers;
+                        } else if (index === 1) {
+                            ul = document.getElementById('schoolList');
+                            iconUrl = 'https://i.imgur.com/2PN8MFI.png'; // School icon
+                            markerArray = schoolMarkers;
+                        } else if (index === 2) {
+                            ul = document.getElementById('hospitalList');
+                            iconUrl = 'https://i.imgur.com/QQGlLE0.png'; // Hospital icon
+                            markerArray = hospitalMarkers;
+                        }
+
+                        const li = document.createElement('li');
+                        li.textContent = `${locationName} - ${distance} km`;
+                        ul.appendChild(li);
+
+                        const customIcon = L.icon({
+                            iconUrl: iconUrl,
+                            iconSize: [42, 42], // Adjust icon size as needed
+                            iconAnchor: [16, 32], // Anchor point of the icon
+                            popupAnchor: [0, -32] // Point from which the popup should open relative to the iconAnchor
+                        });
+
+                        const marker = L.marker([locationLat, locationLon], { icon: customIcon }).addTo(map)
+                            .bindPopup(`${locationName} - ${distance} km`);
+                        markerArray.push(marker);
+                    });
+                })
+                .catch(error => console.error('Error fetching data:', error));
+            });
+        }
+
+        initializeMap();
+    </script>
+</body>
+</html>
